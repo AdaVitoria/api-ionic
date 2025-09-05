@@ -40,31 +40,74 @@ db.connect((err) => {
   }
   console.log("Conectado ao MySQL!");
 
-  // Criar tabela se não existir
+  // Criar tabela de clientes (mantida como está)
   const criarTabelaClientes = `
-    CREATE TABLE IF NOT EXISTS clientes (
-      id INT NOT NULL AUTO_INCREMENT,
-      nome VARCHAR(100) NOT NULL,
-      endereco VARCHAR(255) NOT NULL,
-      foto_perfil VARCHAR(255) DEFAULT NULL,
-      email VARCHAR(255) NOT NULL,
-      senha VARCHAR(255) DEFAULT NULL,
-      login VARCHAR(255) NOT NULL,
-      status ENUM('ativo', 'pendente') DEFAULT 'pendente',
-      tipo ENUM('admin', 'user') DEFAULT 'user',
-      PRIMARY KEY (id)
+  CREATE TABLE IF NOT EXISTS clientes (
+    id INT NOT NULL AUTO_INCREMENT,
+    nome VARCHAR(100) NOT NULL,
+    foto_perfil VARCHAR(255) DEFAULT NULL,
+    email VARCHAR(255) NOT NULL,
+    senha VARCHAR(255) DEFAULT NULL,
+    status ENUM('ativo', 'pendente') DEFAULT 'pendente',
+    tipo ENUM('admin', 'user') DEFAULT 'user',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP, -- <-- ADICIONE ESTA LINHA
+    PRIMARY KEY (id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+`;
+
+  // TABELA NOVA: categorias
+  const criarTabelaCategorias = `
+    CREATE TABLE IF NOT EXISTS categorias (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      nome VARCHAR(100) NOT NULL UNIQUE,
+      descricao TEXT
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
   `;
 
-  const criarTabelaImagens = `CREATE TABLE IF NOT EXISTS imagens (
+  // TABELA 1: insetos (agora com id_categoria e FOREIGN KEY)
+  const criarTabelaInsetos = `
+    CREATE TABLE IF NOT EXISTS insetos (
       id INT AUTO_INCREMENT PRIMARY KEY,
-      url TEXT NOT NULL,
-      descricao TEXT NOT NULL,
-      nome VARCHAR(255) NOT NULL,
-      id_cliente INT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-      FOREIGN KEY (id_cliente) REFERENCES clientes(id) ON DELETE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;`;
+      nome_comum VARCHAR(100) NOT NULL,
+      nome_cientifico VARCHAR(255),
+      id_categoria INT,
+      descricao TEXT,
+      habitat TEXT,
+      comportamento TEXT,
+      FOREIGN KEY (id_categoria) REFERENCES categorias(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+  `;
+
+  // TABELA 2: imagens_inseto (mantida como está)
+  const criarTabelaImagensInseto = `
+    CREATE TABLE IF NOT EXISTS imagens_inseto (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      id_inseto INT NOT NULL,
+      url_imagem TEXT NOT NULL,
+      descricao TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (id_inseto) REFERENCES insetos(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+  `;
+
+  // TRIGGER: Gatilho para limitar 3 imagens por inseto
+  // O MySQL não permite múltiplos statements em um único db.query() por padrão.
+  // Por isso, o DELIMITER não é necessário aqui, a instrução já está separada.
+  const criarGatilhoImagens = `
+    CREATE TRIGGER tr_verificar_limite_imagens
+    BEFORE INSERT ON imagens_inseto
+    FOR EACH ROW
+    BEGIN
+        DECLARE num_imagens INT;
+
+        SELECT COUNT(*) INTO num_imagens FROM imagens_inseto WHERE id_inseto = NEW.id_inseto;
+
+        IF num_imagens >= 3 THEN
+            SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Não é possível adicionar mais de 3 imagens por inseto.';
+        END IF;
+    END;
+  `;
 
   db.query(criarTabelaClientes, (err, result) => {
     if (err) {
@@ -74,11 +117,46 @@ db.connect((err) => {
     }
   });
 
-  db.query(criarTabelaImagens, (err, result) => {
+  db.query(criarTabelaCategorias, (err) => {
     if (err) {
-      console.error("Erro ao criar tabela 'imagens':", err);
+      console.error("Erro ao criar tabela 'categorias':", err);
     } else {
-      console.log("Tabela 'imagens' verificada/criada com sucesso.");
+      console.log("Tabela 'categorias' verificada/criada com sucesso.");
+
+      db.query(criarTabelaInsetos, (err) => {
+        if (err) {
+          console.error("Erro ao criar tabela 'insetos':", err);
+        } else {
+          console.log("Tabela 'insetos' verificada/criada com sucesso.");
+
+          db.query(criarTabelaImagensInseto, (err) => {
+            if (err) {
+              console.error("Erro ao criar tabela 'imagens_inseto':", err);
+            } else {
+              console.log(
+                "Tabela 'imagens_inseto' verificada/criada com sucesso."
+              );
+
+              // Executar a criação do gatilho após todas as tabelas estarem prontas
+              //db.query(criarGatilhoImagens, (err) => {
+              // if (err) {
+              // O gatilho pode já existir, o que causaria um erro. Ignorar se for esse o caso.
+              //if (err.code !== "ER_SP_DOES_NOT_EXIST") {
+              //    console.error(
+              //        "Erro ao criar gatilho 'tr_verificar_limite_imagens':",
+              //        err
+              ////    //  );
+              //  }
+              //} else {
+              //console.log(
+              //"Gatilho 'tr_verificar_limite_imagens' criado com sucesso."
+              //);
+              //}
+              //});
+            }
+          });
+        }
+      });
     }
   });
 });
@@ -123,7 +201,7 @@ const verificarToken = (req, res, next) => {
   );
 };
 
-async function enviarEmail(email, nome, endereco, login) {
+async function enviarEmail(email, nome) {
   const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: {
@@ -183,9 +261,7 @@ async function enviarEmail(email, nome, endereco, login) {
         <div class="container">
           <h1>Nova solicitação de cadastro</h1>
           <p><strong>Nome:</strong> ${nome}</p>
-          <p><strong>Endereço:</strong> ${endereco}</p>
           <p><strong>E-mail:</strong> ${email}</p>
-          <p><strong>Login:</strong> ${login}</p>
 
           <a class="button" href="http://localhost:8100/solicitacoes" target="_blank">Verificar solicitações</a>
 
@@ -217,16 +293,27 @@ const verificarAdmin = (req, res, next) => {
 };
 
 // Rotas públicas
-app.post("/login", async (req, res) => {
-  const { login, senha } = req.body;
 
-  if (!login || !senha) {
-    return res.status(400).json({ error: "Login e senha são obrigatórios" });
+app.get("/hello-world", (req, res) => {
+  // Este console.log aparecerá no seu terminal do backend
+  // sempre que a rota for acessada. É ótimo para depuração!
+  console.log("A rota /hello-world foi acessada!");
+
+  // Envia uma resposta JSON simples para o cliente
+  res.status(200).json({
+    message: "Hello World! A conexão com o backend está funcionando!",
+  });
+});
+app.post("/login", async (req, res) => {
+  const { email, senha } = req.body;
+
+  if (!email || !senha) {
+    return res.status(400).json({ error: "Email e senha são obrigatórios" });
   }
 
   try {
-    const sql = "SELECT * FROM clientes WHERE login = ?";
-    db.query(sql, [login], async (err, results) => {
+    const sql = "SELECT * FROM clientes WHERE email = ?";
+    db.query(sql, [email], async (err, results) => {
       if (err) {
         return res.status(500).json({ error: "Erro ao buscar usuário" });
       }
@@ -256,7 +343,7 @@ app.post("/login", async (req, res) => {
         token,
         user: {
           id: user.id,
-          login: user.login,
+          email: user.email,
           tipo: user.tipo,
         },
       });
@@ -267,45 +354,81 @@ app.post("/login", async (req, res) => {
   }
 });
 
-app.post("/clientes", async (req, res) => {
-  const { nome, endereco, email, senha, login } = req.body;
+// Rota para dados do gráfico de pizza (status de usuários)
+app.get("/dashboard/status-usuarios", (req, res) => {
+  const sql = `
+    SELECT status, COUNT(*) as quantidade 
+    FROM clientes 
+    GROUP BY status
+  `;
+  db.query(sql, (err, results) => {
+    if (err) {
+      return res.status(500).json({ error: "Erro ao buscar dados de status." });
+    }
+    res.json(results);
+  });
+});
 
-  if (!nome || !endereco || !email || !senha || !login) {
+// Rota para dados do gráfico de linhas (cadastros por dia)
+app.get("/dashboard/cadastros-por-dia", (req, res) => {
+  const { inicio, fim } = req.query;
+  if (!inicio || !fim) {
     return res
       .status(400)
-      .json({ error: "Nome, endereço, email, senha e login são obrigatórios" });
+      .json({ error: "Datas de início e fim são obrigatórias." });
+  }
+
+  const sql = `
+    SELECT DATE(created_at) as dia, COUNT(*) as quantidade 
+    FROM clientes 
+    WHERE DATE(created_at) BETWEEN ? AND ?
+    GROUP BY DATE(created_at) 
+    ORDER BY dia ASC
+  `;
+  db.query(sql, [inicio, fim], (err, results) => {
+    if (err) {
+      return res
+        .status(500)
+        .json({ error: "Erro ao buscar dados de cadastros." });
+    }
+    res.json(results);
+  });
+});
+
+app.post("/clientes", async (req, res) => {
+  const { nome, email, senha } = req.body;
+
+  if (!nome || !email || !senha) {
+    return res
+      .status(400)
+      .json({ error: "Nome, email e senha  são obrigatórios" });
   }
 
   try {
     const senhaCriptografada = await bcrypt.hash(senha, 10);
-    const sql =
-      "INSERT INTO clientes (nome, endereco, email, senha, login) VALUES (?, ?, ?, ?, ?)";
+    const sql = "INSERT INTO clientes (nome, email, senha) VALUES (?, ?, ?)";
 
-    db.query(
-      sql,
-      [nome, endereco, email, senhaCriptografada, login],
-      async (err, result) => {
-        if (err) {
-          return res
-            .status(500)
-            .json({ error: "Erro ao solicitar cadastro de cliente" });
-        }
-
-        // Chamada da função para envio de e-mail
-        try {
-          await enviarEmail(email, nome, endereco, login);
-          console.log("Notificação de nova solicitação enviada.");
-        } catch (emailErr) {
-          console.error("Erro ao enviar e-mail de notificação:", emailErr);
-          // Continua o fluxo mesmo se o e-mail falhar
-        }
-
-        res.status(201).json({
-          message: "Solicitação de Cadastro Realizada!",
-          id: result.insertId,
-        });
+    db.query(sql, [nome, email, senhaCriptografada], async (err, result) => {
+      if (err) {
+        return res
+          .status(500)
+          .json({ error: "Erro ao solicitar cadastro de cliente" });
       }
-    );
+
+      // Chamada da função para envio de e-mail
+      try {
+        await enviarEmail(email, nome);
+        console.log("Notificação de nova solicitação enviada.");
+      } catch (emailErr) {
+        console.error("Erro ao enviar e-mail de notificação:", emailErr);
+        // Continua o fluxo mesmo se o e-mail falhar
+      }
+
+      res.status(201).json({
+        message: "Solicitação de Cadastro Realizada!",
+        id: result.insertId,
+      });
+    });
   } catch (error) {
     res.status(500).json({ error: "Erro ao criptografar a senha" });
   }
@@ -528,29 +651,67 @@ app.get("/api/imagens-por-dia", (req, res) => {
   });
 });
 
-// Rota para atualizar um cliente com upload de foto
-app.put("/clientes/:id", upload.single("fotoPerfil"), (req, res) => {
-  const { id } = req.params;
-  const { nome, endereco } = req.body;
-  const foto_perfil = req.file ? `/uploads/${req.file.filename}` : null;
+// SUBSTITUA A SUA ROTA app.put("/clientes/:id", ...) POR ESTA:
 
-  if (!nome || !endereco) {
-    return res.status(400).json({ error: "Nome e endereço são obrigatórios" });
+app.put(
+  "/clientes/:id",
+  verificarToken,
+  upload.single("foto_perfil"),
+  async (req, res) => {
+    const { id } = req.params;
+    const { nome, email, senha } = req.body;
+    const usuarioLogado = req.user; // Informações do token JWT (id, tipo)
+
+    // --- VERIFICAÇÃO DE PERMISSÃO ---
+    // Um usuário só pode editar a si mesmo, a menos que seja um admin.
+    if (usuarioLogado.tipo !== "admin" && usuarioLogado.id.toString() !== id) {
+      return res.status(403).json({
+        error: "Acesso negado. Você só pode editar seu próprio perfil.",
+      });
+    }
+
+    if (!nome || !email) {
+      return res.status(400).json({ error: "Nome e email são obrigatórios." });
+    }
+
+    try {
+      let sql = "UPDATE clientes SET nome = ?, email = ?";
+      const params = [nome, email];
+
+      // Se uma nova senha for fornecida, criptografa e adiciona à query
+      if (senha && senha.trim() !== "") {
+        const senhaCriptografada = await bcrypt.hash(senha, 10);
+        sql += ", senha = ?";
+        params.push(senhaCriptografada);
+      }
+
+      // Se uma nova foto de perfil for enviada
+      if (req.file) {
+        const foto_perfil_url = `/uploads/${req.file.filename}`;
+        sql += ", foto_perfil = ?";
+        params.push(foto_perfil_url);
+      }
+
+      sql += " WHERE id = ?";
+      params.push(id);
+
+      db.query(sql, params, (err, result) => {
+        if (err) {
+          console.error("Erro ao atualizar cliente:", err);
+          return res
+            .status(500)
+            .json({ error: "Erro interno ao atualizar perfil." });
+        }
+        if (result.affectedRows === 0) {
+          return res.status(404).json({ error: "Usuário não encontrado." });
+        }
+        res.json({ message: "Perfil atualizado com sucesso!" });
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao processar a requisição." });
+    }
   }
-
-  const sql =
-    "UPDATE clientes SET nome = ?, endereco = ?, foto_perfil = ? WHERE id = ?";
-  db.query(sql, [nome, endereco, foto_perfil, id], (err, updateResult) => {
-    if (err) {
-      console.error("Erro no banco de dados:", err);
-      return res.status(500).json({ error: "Erro ao atualizar cliente" });
-    }
-    if (updateResult.affectedRows === 0) {
-      return res.status(404).json({ error: "Cliente não encontrado" });
-    }
-    res.json({ message: "Cliente atualizado com sucesso!", foto_perfil });
-  });
-});
+);
 
 app.get("/clientes/:id", (req, res) => {
   const { id } = req.params;
@@ -569,9 +730,356 @@ app.get("/clientes/:id", (req, res) => {
 
 // Servir arquivos estáticos da pasta "uploads"
 app.use("/uploads", express.static(uploadsDir));
+// ROTAS PARA INSETOS
+app.get("/insetos", (req, res) => {
+  // A lógica da função 'read' vem diretamente para cá
+  let sql = `
+    SELECT 
+      i.*, 
+      GROUP_CONCAT(ii.url_imagem) as imagens 
+    FROM 
+      insetos i
+    LEFT JOIN 
+      imagens_inseto ii ON i.id = ii.id_inseto
+    WHERE 1=1
+  `;
+  const params = [];
+  const filtro = req.query; // Os filtros vêm de req.query
+
+  if (filtro.id) {
+    sql += " AND i.id = ?";
+    params.push(filtro.id);
+  }
+  if (filtro.nome_comum) {
+    sql += " AND i.nome_comum LIKE ?";
+    params.push(`%${filtro.nome_comum}%`);
+  }
+  if (filtro.id_categoria) {
+    sql += " AND i.id_categoria = ?";
+    params.push(filtro.id_categoria);
+  }
+
+  sql += " GROUP BY i.id"; // Agrupa os resultados por inseto
+
+  // O callback do db.query envia a resposta (res)
+  db.query(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
 
 // Rotas protegidas
 app.use(verificarToken);
+
+// Adicione estas rotas no seu index.js, por exemplo, depois da rota de login
+
+// CRUD de Categorias
+const crudCategorias = {
+  create: (nome, descricao, callback) => {
+    const sql = `INSERT INTO categorias (nome, descricao) VALUES (?, ?)`;
+    db.query(sql, [nome, descricao], callback);
+  },
+  read: (id, callback) => {
+    let sql = "SELECT * FROM categorias";
+    const params = [];
+    if (id) {
+      sql += " WHERE id = ?";
+      params.push(id);
+    }
+    db.query(sql, params, callback);
+  },
+  update: (id, nome, descricao, callback) => {
+    const sql = `UPDATE categorias SET nome = ?, descricao = ? WHERE id = ?`;
+    db.query(sql, [nome, descricao, id], callback);
+  },
+  delete: (id, callback) => {
+    const sql = `DELETE FROM categorias WHERE id = ?`;
+    db.query(sql, [id], callback);
+  },
+};
+
+// CRUD de Insetos
+const crudInsetos = {
+  create: (
+    nome_comum,
+    nome_cientifico,
+    id_categoria,
+    descricao,
+    habitat,
+    comportamento,
+    callback
+  ) => {
+    const sql = `INSERT INTO insetos (nome_comum, nome_cientifico, id_categoria, descricao, habitat, comportamento) VALUES (?, ?, ?, ?, ?, ?)`;
+    const params = [
+      nome_comum,
+      nome_cientifico,
+      id_categoria,
+      descricao,
+      habitat,
+      comportamento,
+    ];
+    db.query(sql, params, callback);
+  },
+  read: (filtro, callback) => {
+    let sql = "SELECT * FROM insetos WHERE 1=1";
+    const params = [];
+    if (filtro.id) {
+      sql += " AND id = ?";
+      params.push(filtro.id);
+    }
+    if (filtro.nome_comum) {
+      sql += " AND nome_comum LIKE ?";
+      params.push(`%${filtro.nome_comum}%`);
+    }
+    if (filtro.id_categoria) {
+      sql += " AND id_categoria = ?";
+      params.push(filtro.id_categoria);
+    }
+    db.query(sql, params, callback);
+  },
+  update: (id, dados, callback) => {
+    const updates = Object.keys(dados).map((key) => `${key} = ?`);
+    const values = Object.values(dados);
+    values.push(id);
+    const sql = `UPDATE insetos SET ${updates.join(", ")} WHERE id = ?`;
+    db.query(sql, values, callback);
+  },
+  delete: (id, callback) => {
+    const sql = `DELETE FROM insetos WHERE id = ?`;
+    db.query(sql, [id], callback);
+  },
+};
+
+// CRUD de Imagens de Inseto
+// ROTA NOVA: Adicionar UMA imagem a um inseto
+app.post(
+  "/insetos/:id_inseto/imagem",
+  verificarToken, // Protegendo a rota
+  upload.single("imagem"), // 'imagem' no singular
+  (req, res) => {
+    const { id_inseto } = req.params;
+    if (!req.file) {
+      return res.status(400).json({ error: "Nenhum arquivo enviado." });
+    }
+
+    // 1. Verificar quantas imagens o inseto já tem
+    const countSql =
+      "SELECT COUNT(*) as total FROM imagens_inseto WHERE id_inseto = ?";
+    db.query(countSql, [id_inseto], (err, results) => {
+      if (err) {
+        // Se der erro, apaga o arquivo que já foi salvo pelo multer
+        fs.unlink(req.file.path, () => {});
+        return res
+          .status(500)
+          .json({ error: "Erro ao verificar imagens existentes." });
+      }
+
+      if (results[0].total >= 3) {
+        fs.unlink(req.file.path, () => {});
+        return res
+          .status(400)
+          .json({ error: "Limite de 3 imagens por inseto já atingido." });
+      }
+
+      // 2. Se o limite não foi atingido, insere a nova imagem
+      const url_imagem = `/uploads/${req.file.filename}`;
+      const insertSql =
+        "INSERT INTO imagens_inseto (id_inseto, url_imagem) VALUES (?, ?)";
+      db.query(insertSql, [id_inseto, url_imagem], (err, result) => {
+        if (err) {
+          fs.unlink(req.file.path, () => {});
+          return res.status(500).json({ error: "Erro ao salvar a imagem." });
+        }
+        // Retorna o objeto da imagem recém-criada para o frontend
+        res.status(201).json({ id: result.insertId, id_inseto, url_imagem });
+      });
+    });
+  }
+);
+
+// ROTA NOVA: Deletar UMA imagem de inseto pelo seu ID específico
+app.delete("/insetos/imagens/:id_imagem", verificarToken, (req, res) => {
+  const { id_imagem } = req.params;
+
+  // 1. Buscar a imagem no banco para pegar a URL e deletar o arquivo físico
+  const findSql = "SELECT url_imagem FROM imagens_inseto WHERE id = ?";
+  db.query(findSql, [id_imagem], (err, results) => {
+    if (err) {
+      return res.status(500).json({ error: "Erro no banco de dados." });
+    }
+    if (results.length === 0) {
+      return res.status(404).json({ error: "Imagem não encontrada." });
+    }
+
+    const filePath = path.join(__dirname, results[0].url_imagem);
+
+    // 2. Deletar a imagem do banco de dados
+    const deleteSql = "DELETE FROM imagens_inseto WHERE id = ?";
+    db.query(deleteSql, [id_imagem], (err, result) => {
+      if (err) {
+        return res
+          .status(500)
+          .json({ error: "Erro ao deletar imagem do banco." });
+      }
+
+      // 3. Deletar o arquivo físico do servidor
+      fs.unlink(filePath, (unlinkErr) => {
+        if (unlinkErr) {
+          // Loga o erro mas continua, pois o mais importante (banco) foi feito
+          console.error("Erro ao deletar arquivo do disco:", unlinkErr);
+        }
+        res.status(200).json({ message: "Imagem deletada com sucesso." });
+      });
+    });
+  });
+});
+
+const crudImagensInseto = {
+  create: (id_inseto, url_imagem, descricao, callback) => {
+    const sql = `INSERT INTO imagens_inseto (id_inseto, url_imagem, descricao) VALUES (?, ?, ?)`;
+    db.query(sql, [id_inseto, url_imagem, descricao], callback);
+  },
+  read: (id_inseto, callback) => {
+    const sql = `SELECT * FROM imagens_inseto WHERE id_inseto = ?`;
+    db.query(sql, [id_inseto], callback);
+  },
+  update: (id, url_imagem, descricao, callback) => {
+    const sql = `UPDATE imagens_inseto SET url_imagem = ?, descricao = ? WHERE id = ?`;
+    db.query(sql, [url_imagem, descricao, id], callback);
+  },
+  delete: (id, callback) => {
+    const sql = `DELETE FROM imagens_inseto WHERE id = ?`;
+    db.query(sql, [id], callback);
+  },
+};
+
+// ===============================
+// Rotas da API
+// ===============================
+
+// ROTAS PARA CATEGORIAS
+app.get("/categorias", (req, res) => {
+  crudCategorias.read(null, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.post("/categorias", (req, res) => {
+  const { nome, descricao } = req.body;
+  if (!nome)
+    return res
+      .status(400)
+      .json({ error: "O nome da categoria é obrigatório." });
+  crudCategorias.create(nome, descricao, (err, result) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res
+      .status(201)
+      .json({ id: result.insertId, message: "Categoria criada com sucesso." });
+  });
+});
+
+app.put("/categorias/:id", (req, res) => {
+  const { id } = req.params;
+  const { nome, descricao } = req.body;
+  crudCategorias.update(id, nome, descricao, (err, result) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ message: `Categoria ID ${id} atualizada.` });
+  });
+});
+
+app.delete("/categorias/:id", (req, res) => {
+  const { id } = req.params;
+  crudCategorias.delete(id, (err, result) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ message: `Categoria ID ${id} deletada.` });
+  });
+});
+
+app.put("/insetos/:id", (req, res) => {
+  const { id } = req.params;
+  crudInsetos.update(id, req.body, (err, result) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ message: `Inseto ID ${id} atualizado.` });
+  });
+});
+
+app.delete("/insetos/:id", (req, res) => {
+  const { id } = req.params;
+  crudInsetos.delete(id, (err, result) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ message: `Inseto ID ${id} deletado.` });
+  });
+});
+
+// ROTAS PARA IMAGENS_INSETO
+app.get("/insetos/:id_inseto/imagens", (req, res) => {
+  const { id_inseto } = req.params;
+  crudImagensInseto.read(id_inseto, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.post(
+  "/insetos/:id_inseto/imagens",
+  upload.array("images", 3),
+  (req, res) => {
+    const { id_inseto } = req.params;
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: "Nenhuma imagem foi enviada." });
+    }
+
+    const inserts = req.files.map((file) => {
+      return new Promise((resolve, reject) => {
+        const url = `/uploads/${file.filename}`;
+        crudImagensInseto.create(id_inseto, url, null, (err, result) => {
+          if (err) {
+            fs.unlink(file.path, () => {});
+            return reject(err);
+          }
+          resolve(result.insertId);
+        });
+      });
+    });
+
+    Promise.all(inserts)
+      .then((ids) => {
+        res.status(201).json({
+          message: `${ids.length} imagens adicionadas com sucesso.`,
+          ids,
+        });
+      })
+      .catch((err) => {
+        res.status(400).json({ error: err.message });
+      });
+  }
+);
+
+app.delete("/imagens/:id_imagem", (req, res) => {
+  const { id_imagem } = req.params;
+  crudImagensInseto.read(null, (err, rows) => {
+    // Busca a imagem para obter o URL
+    if (err) return res.status(500).json({ error: err.message });
+    const imagem = rows.find((row) => row.id == id_imagem);
+    if (!imagem)
+      return res.status(404).json({ error: "Imagem não encontrada." });
+
+    const imagePath = path.join(__dirname, imagem.url_imagem);
+
+    crudImagensInseto.delete(id_imagem, (err, result) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (result.affectedRows > 0) {
+        fs.unlink(imagePath, (unlinkErr) => {
+          if (unlinkErr) console.error("Erro ao deletar arquivo:", unlinkErr);
+          res.json({ message: "Imagem deletada com sucesso." });
+        });
+      } else {
+        res.status(404).json({ message: "Nenhuma imagem deletada." });
+      }
+    });
+  });
+});
 
 app.get("/clientes", verificarToken, verificarAdmin, (req, res) => {
   db.query("SELECT * FROM clientes where status = 'ativo'", (err, results) => {
@@ -656,6 +1164,29 @@ app.put("/aprovarUsuario", verificarToken, verificarAdmin, (req, res) => {
           .json({ error: "Usuário aprovado, mas houve erro ao enviar e-mail" });
       }
     });
+  });
+});
+
+// Rota para mover usuário para pendente
+app.put("/usuarios/:id/pendente", (req, res) => {
+  const { id } = req.params;
+
+  const pendenteSql = "UPDATE clientes SET status = 'pendente' WHERE id = ?";
+  db.query(pendenteSql, [id], (err, result) => {
+    if (err) {
+      console.error("Erro ao atualizar usuário para pendente:", err);
+      return res
+        .status(500)
+        .json({ error: "Erro ao atualizar usuário para pendente" });
+    }
+
+    if (result.affectedRows === 0) {
+      return res
+        .status(404)
+        .json({ error: "Usuário não encontrado para atualização" });
+    }
+
+    res.json({ message: "Usuário movido para pendente com sucesso!" });
   });
 });
 

@@ -1,0 +1,27 @@
+
+
+
+# Dependências - Essencial ignorar
+node_modules/
+
+# Arquivos de Ambiente e Segredos - Essencial por segurança
+.env
+
+# Pasta de Uploads Locais - Desnecessária na Vercel
+uploads/
+
+# Arquivos de Script Antigos ou de Teste
+# Ignorando para manter o deploy limpo
+server.js
+seed.js
+teste.py
+api.py
+app.py
+
+# Pasta de Dados ou Datasets - Geralmente não vai no repositório
+dataset/
+
+# Adicionando padrões comuns para evitar lixo no repositório
+.DS_Store
+Thumbs.db
+npm-debug.log*
