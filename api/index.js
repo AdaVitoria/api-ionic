@@ -4,7 +4,7 @@ import "dotenv/config";
 import express from "express";
 import mysql from "mysql2";
 import cors from "cors";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 import { URL } from "url";
@@ -161,13 +161,11 @@ app.post("/login", async (req, res) => {
       process.env.JWT_SECRET || "minha-chave-secreta",
       { expiresIn: "8h" }
     );
-    res
-      .status(200)
-      .json({
-        message: "Login realizado",
-        token,
-        user: { id: user.id, email: user.email, tipo: user.tipo },
-      });
+    res.status(200).json({
+      message: "Login realizado",
+      token,
+      user: { id: user.id, email: user.email, tipo: user.tipo },
+    });
   } catch (error) {
     console.error("Erro /login:", error);
     res.status(500).json({ error: "Erro interno ao fazer login" });
@@ -188,12 +186,10 @@ app.post("/clientes", async (req, res) => {
     // Envio de email para o admin sobre a nova solicitação
     await enviarEmail(email, nome);
 
-    res
-      .status(201)
-      .json({
-        message: "Solicitação de Cadastro Realizada!",
-        id: result.insertId,
-      });
+    res.status(201).json({
+      message: "Solicitação de Cadastro Realizada!",
+      id: result.insertId,
+    });
   } catch (error) {
     console.error("Erro /clientes POST:", error);
     if (error.code === "ER_DUP_ENTRY") {
